@@ -1,0 +1,106 @@
+{
+    "basic_settings": {
+      "platform": "pi4",
+      "camera": "imx219",
+      "framerate": 25,
+      "decimation_factor": 2,
+      "motion": "knn"
+    },
+    "platform_settings": {
+      "piw2": {
+        "lores": "YUV420",
+        "lores_resolution": {
+            "width":640,
+            "height":480
+        },
+        "main":"YUV420",
+        "main_resolution": {
+          "width": 1024,
+          "height": 768
+        },
+        "led_pin": 18,
+        "inference":"None"
+      },
+      "pi4": {
+        "lores": "YUV420",
+        "lores_resolution": {
+            "width":640,
+            "height":480
+        },
+        "main":"YUV420",
+        "main_resolution": {
+          "width": 1024,
+          "height": 768
+        },
+        "led_pin": 18,
+        "inference":"hog"
+      },
+      "pi5": {
+        "lores": "RGB888",
+        "lores_resolution": {
+            "width":640,
+            "height":480
+        },
+        "main":"YUV420",
+        "main_resolution": {
+          "width": 1024,
+          "height": 768
+        },
+        "led_pin": 22,
+        "inference":"svm"
+      }
+    },
+    "camera_settings": {
+      "imx219": {
+        "sensor_mode": 1,
+        "iso": 100,
+        "exposure_mode": "auto",
+        "hflip":1,
+        "vflip":1
+      },
+      "imx477": {
+        "sensor_mode": 1,
+        "iso": 200,
+        "exposure_mode": "sports",
+        "hflip":1,
+        "vflip":1
+      },
+      "ov5647": {
+        "sensor_mode": 1,
+        "iso": 200,
+        "exposure_mode": "sports",
+        "hflip":1,
+        "vflip":1
+      },
+      "imx708_wide_noir": {
+        "sensor_mode": 1,
+        "iso": 200,
+        "exposure_mode": "sports",
+        "hflip":0,
+        "vflip":0
+
+      }
+    },
+    "motion_settings": {
+      "knn": {
+        "history": 300,
+        "dist2Threshold": 400,
+        "detectShadows": false
+      },
+      "mog2": {
+        "history": 300,
+        "varThreshold": 16,
+        "detectShadows": false
+      }
+    },
+    "output_settings": {
+      "file_format": "mp4",
+      "output_directory": "/home/baddemanax/camera_output"
+    },
+    "inference":{
+      "hog":{
+
+      }
+
+    }
+  }

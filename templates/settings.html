@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Settings</h1>
+<form method="POST" action="{{ url_for('rotate_camera') }}">
+    <div class="form-group">
+        <label for="angle">Rotate Camera (degrees):</label>
+        <input type="number" class="form-control" id="angle" name="angle" min="0" max="360" step="90">
+    </div>
+    <button type="submit" class="btn btn-primary">Rotate</button>
+</form>
+<body>
+    <h1>WiFi Hotspot Control</h1>
+    <div id="status" class="status">Checking status...</div>
+    <button id="toggleButton" class="btn btn-primary">Loading...</button>
+    <h1>System Control</h1>
+    <button onclick="sendCommand('reboot')" class="btn btn-primary">Reboot</button>
+    <button onclick="sendCommand('shutdown')" class="btn btn-primary">Shutdown</button>
+    <p id="status_pi"></p>
+    <script>
+
+        // scripts for wifi control
+        $(document).ready(function() {
+            function updateStatus() {
+                $.ajax({
+                    url: '/status_wifi',
+                    method: 'GET',
+                    success: function(data) {
+                        const status = data.status;
+                        $('#status')
+                            .removeClass('active inactive')
+                            .addClass(status)
+                            .text(`Hotspot is ${status}`);
+                        
+                        $('#toggleButton').text(status === 'active' ? 'Turn Off' : 'Turn On');
+                        $('#errorMessage').text('');
+                    },
+                    error: function(xhr, status, error) {
+                        $('#errorMessage').text('Error checking status: ' + error);
+                    }
+                });
+            }
+
+            $('#toggleButton').click(function() {
+                const action = $('#status').hasClass('active') ? 'off' : 'on';
+                $(this).prop('disabled', true).text('Processing...');
+                
+                $.ajax({
+                    url: `/toggle_wifi/${action}`,
+                    method: 'GET',
+                    success: function(response) {
+                        if (response.success) {
+                            updateStatus();
+                        } else {
+                            $('#errorMessage').text('Error: ' + (response.error || 'Unknown error'));
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        $('#errorMessage').text('Error toggling hotspot: ' + error);
+                    },
+                    complete: function() {
+                        $('#toggleButton').prop('disabled', false);
+                    }
+                });
+            });
+
+            // Update status every 5 seconds
+            setInterval(updateStatus, 5000);
+            
+            // Initial status check
+            updateStatus();
+        });
+        // scripts for shutdown and reboot
+        let socket;
+
+        function connect() {
+            socket = new WebSocket('ws://' + window.location.host + '/ws_pictrl');
+            
+            socket.onmessage = function(event) {
+                document.getElementById('status').textContent = event.data;
+            };
+
+            socket.onclose = function(event) {
+                console.log('WebSocket closed. Reconnecting...');
+                setTimeout(connect, 1000);
+            };
+
+            socket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function sendCommand(action) {
+            if (socket.readyState === WebSocket.OPEN) {
+                if (confirm(`Are you sure you want to ${action} the Raspberry Pi?`)) {
+                    socket.send(JSON.stringify({action: action, confirm: true}));
+                } else {
+                    socket.send(JSON.stringify({action: action, confirm: false}));
+                }
+            } else {
+                console.error('WebSocket is not open. Cannot send command.');
+            }
+        }
+
+        window.onload = connect;
+    </script>
+</body>
+{% endblock %}

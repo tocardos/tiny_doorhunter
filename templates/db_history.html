@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Recording History{% endblock %}
+{% block content %}
+    <h1 class="my-4">Recording History</h1>
+    <div class="row">
+        {% for recording in recordings %}
+<div class="col-12 col-md-6 recording-item">
+    <h3 class="recording-timestamp">{{ recording.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</h3>
+    <!--
+    <video class="recording-video" controls>
+        <source src="{{ url_for('get_recording', filename=recording.filename) }}" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+-->
+
+<video class="recording-video" controls poster="{{ url_for('get_thumbnail', recording_id=recording.id) }}">
+    <source src="{{ url_for('get_recording', filename=recording.filename) }}" type="video/mp4">
+    Your browser does not support the video tag.
+</video>
+
+    <div class="d-flex align-items-center gap-3 mt-2">
+        <form method="POST" action="{{ url_for('delete_recording', recording_id=recording.id) }}">
+            <button type="submit" class="btn btn-danger">Delete</button>
+        </form>
+        <label class="form-check-label" for="reminder-{{ recording.id }}">Remind me</label>
+        <div class="form-check form-switch p-0">
+            <input class="form-check-input reminder-checkbox m-0" 
+                   type="checkbox" 
+                   role="switch" 
+                   id="reminder-{{ recording.id }}" 
+                   data-recording-id="{{ recording.id }}" 
+                   {% if recording.reminder %}checked{% endif %}>
+        </div>
+    </div>
+</div>
+{% endfor %}
+</div>
+
+<script>
+    document.querySelectorAll('.reminder-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', async (event) => {
+            const recordingId = event.target.dataset.recordingId;
+            const response = await fetch(`/recordings/${recordingId}/toggle-reminder`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ reminder: event.target.checked })
+            });
+            if (response.ok) {
+                console.log('Reminder toggled successfully');
+            } else {
+                console.error('Failed to toggle reminder');
+            }
+        });
+    });
+</script>
+{% endblock %}
