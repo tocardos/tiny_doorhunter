@@ -3,6 +3,7 @@
       "platform": "pi4",
       "camera": "imx219",
       "framerate": 25,
+      "every_n_frames":3,
       "decimation_factor": 2,
       "motion": "knn"
     },

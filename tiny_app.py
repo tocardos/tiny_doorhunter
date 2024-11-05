@@ -4,6 +4,8 @@ import asyncio
 import aiofiles.os as aios
 from quart import Quart, websocket, render_template_string,render_template,send_from_directory
 from quart import request, redirect, url_for, flash,jsonify,send_from_directory,send_file
+#from quart import BackgroundTask
+
 from sqlalchemy import select,delete
 
 from picamera2 import Picamera2,MappedArray
@@ -23,6 +25,7 @@ import psutil
 import json
 import os
 import logging
+import socket
 
 # import from local definitions
 from config import init_db, get_db, DatabaseOperations, Contact,Recording
@@ -228,6 +231,8 @@ class VideoProcessor:
         mode=self.picam2.sensor_modes[mode]
         # load camera and gpu config from config.json
         framerate = config['basic_settings']['framerate']
+        self.process_every_n_frames = config['basic_settings']['every_n_frames']
+        slider_state['frameRatio']= self.process_every_n_frames
         self.decimation_factor = config['basic_settings']['decimation_factor']
         self.lores_size = (
             platform_settings['lores_resolution']['width'],
@@ -276,7 +281,7 @@ class VideoProcessor:
         
         self.face_detect_threshold = 0.80 # level above considered as good detection
         #self.face_detected = 0
-        self.process_every_n_frames = 5
+        
         self.frame_count = 0
         
         
@@ -316,11 +321,24 @@ class VideoProcessor:
         }
         self.recording_config = {
             'max_duration': 30,  # maximum recording duration in seconds
-            'cooldown_time': 8   # time without detections before stopping
+            'cooldown_time': 5   # time without detections before stopping
         }
         self.thumbnail = None # picture derived from video clip
         self.thumbnail_flag = False # without good person algo we should keep 
         # thumbnail processing to only 1 shot ( cpu constraint)
+
+        # get zerotier ip address
+        interfaces = psutil.net_if_addrs()
+        zerotier_ip = None
+        for interface, addr_info in interfaces.items():
+            if 'zt' in interface:  # Look for ZeroTier interface
+                for addr in addr_info:
+                    if addr.family == socket.AF_INET:  # Check for IPv4 address
+                        zerotier_ip = addr.address
+                        break
+        self.ip = zerotier_ip
+        
+        logger.info(f" zerotier ip address {self.ip}")
 
     #- - - - - - - - - - - 
     # ROTATE
@@ -563,7 +581,9 @@ class VideoProcessor:
 
     async def handle_sms(self, filename):
         # to be done sending the url instead filename
-        msg = f"Motion Detected check the file: {filename}"
+        url = f"http://{self.ip}:8000{filename}"
+        msg = f"Motion Detected check the file: {url}"
+        logger.info(f"sms msg : {msg}")
         try:
             async for db in get_db():
                 success_count, total_contacts = await DatabaseOperations.send_sms_to_contacts(db, msg)
@@ -973,9 +993,16 @@ async def recordings(filename):
     recordings_path = os.path.join(app.root_path, 'recordings')
     return await send_from_directory(recordings_path, filename)
 
+async def serve_recording(filename):
+    #await asyncio.sleep(0.1)  # Delay to reduce conflict with live stream
+    await send_file(f"/{filename}", conditional=True)
+
 @app.route('/get_recording/<path:filename>')
 async def get_recording(filename):
     logger.info(f"recording file name to be played {filename}")
+    #task = app.add_background_task(serve_recording, filename)
+    #await task.start() 
+    #return "Playback initiated.", 200
     return await send_file(f"/{filename}",conditional=True)
 
 @app.route('/get_thumbnail/<int:recording_id>')
