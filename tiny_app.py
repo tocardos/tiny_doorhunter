@@ -581,7 +581,7 @@ class VideoProcessor:
 
     async def handle_sms(self, filename):
         # to be done sending the url instead filename
-        url = f"http://{self.ip}:8000{filename}"
+        url = f"http://{self.ip}:8000/get_recording{filename}"
         msg = f"Motion Detected check the file: {url}"
         logger.info(f"sms msg : {msg}")
         try:
@@ -989,7 +989,7 @@ async def history():
 
 @app.route('/recordings/<filename>')
 async def recordings(filename):
-    logger.info(f"recording file name to be played {filename}")
+    logger.info(f"recording files name to be played {filename}")
     recordings_path = os.path.join(app.root_path, 'recordings')
     return await send_from_directory(recordings_path, filename)
 
@@ -999,7 +999,7 @@ async def serve_recording(filename):
 
 @app.route('/get_recording/<path:filename>')
 async def get_recording(filename):
-    logger.info(f"recording file name to be played {filename}")
+    logger.info(f"recording file to be played {filename}")
     #task = app.add_background_task(serve_recording, filename)
     #await task.start() 
     #return "Playback initiated.", 200
