@@ -21,8 +21,9 @@ import dbus.mainloop.glib
 from gi.repository import GLib
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+#logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("sqlalchemy.engine").setLevel(logging.CRITICAL)
 
 HOTSPOT_UUID = "fa1185cf-e8a2-4ad2-9b0e-bc1704f71b36"
 

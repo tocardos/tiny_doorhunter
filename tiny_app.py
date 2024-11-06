@@ -39,8 +39,10 @@ import multiprocessing
 # import for pir detection
 import RPi.GPIO as GPIO
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.CRITICAL, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logging.getLogger("sqlalchemy.engine").setLevel(logging.CRITICAL)
 
 HOTSPOT_UUID = "fa1185cf-e8a2-4ad2-9b0e-bc1704f71b36"
 
@@ -190,8 +192,9 @@ class VideoProcessor:
         # queue for framee multiprocessing 
         self.detections = asyncio.Queue()
         self.recording_queue = Queue()
-        self.recording_thread = threading.Thread(target=self.recording_worker, daemon=True)
-        self.recording_thread.start()
+        
+        #self.recording_thread = threading.Thread(target=self.recording_worker, daemon=True)
+        #self.recording_thread.start()
         
 
         self.face_detected = 0
@@ -230,7 +233,7 @@ class VideoProcessor:
         mode = camera_settings['sensor_mode']
         mode=self.picam2.sensor_modes[mode]
         # load camera and gpu config from config.json
-        framerate = config['basic_settings']['framerate']
+        self.framerate = config['basic_settings']['framerate']
         self.process_every_n_frames = config['basic_settings']['every_n_frames']
         slider_state['frameRatio']= self.process_every_n_frames
         self.decimation_factor = config['basic_settings']['decimation_factor']
@@ -252,7 +255,7 @@ class VideoProcessor:
             sensor={"output_size":mode['size'],'bit_depth':mode['bit_depth']},
             main={"size": self.main_size, "format": format_main},
             lores={"size": self.lores_size, "format": format_lores},
-            controls={'FrameRate': framerate, "FrameDurationLimits": (40000, 40000) ,'Saturation':0.0},
+            controls={'FrameRate': self.framerate, "FrameDurationLimits": (40000, 40000) ,'Saturation':0.0},
             transform=Transform(vflip=vfl,hflip=hfl)
         )
         self.picam2.configure(video_config)
@@ -268,9 +271,9 @@ class VideoProcessor:
         # doing the overlay after processing is better to avoid impacting detection
         self.picam2.post_callback = self.apply_timestamp
         # setting gpu encoder
-        self.encoder = H264Encoder() # by default quality is set to medium
+        self.encoder = H264Encoder(framerate=self.framerate) # by default quality is set to medium
         # use circular output to have a preroll of 1 second
-        self.circ=CircularOutput(buffersize=framerate*preroll)
+        self.circ=CircularOutput(buffersize=self.framerate*preroll)
         # write encoder output to circ buffer for recording
         
         self.picam2.start_encoder(self.encoder,self.circ,name="main")
@@ -387,6 +390,7 @@ class VideoProcessor:
                     
                     # Calculate CPU load
                     self.cpu_load = psutil.cpu_percent()
+            self.handle_recording()
             
             
     def grayout(self,request):
@@ -423,9 +427,11 @@ class VideoProcessor:
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
             self.motion_detected =0
+            self.face_detected =0
             for contour in contours:
                 if cv2.contourArea(contour) > min_area:
                     self.motion_detected =1
+                    self.face_detected = 1
                     asyncio.run_coroutine_threadsafe(self.detections.put(('camera', time.time())), self.app_loop)
                    
             images = None
@@ -459,6 +465,8 @@ class VideoProcessor:
                 self.filename = os.path.join(self.relative_path, f"detection_{formatted_time}")
                 self.circ.fileoutput=self.filename
                 self.circ.start()
+                # reset thumbnail flag such it takes second detection... sligthly better 
+                self.thumbnail_flag = True
                 
             self.ltime = time.time()  # Set ltime when recording starts and continue until
             
@@ -474,7 +482,7 @@ class VideoProcessor:
             print()
             print("Preparing an mp4 version")
             # convert file to mp4
-            cmd = 'ffmpeg -nostats -loglevel 0 -r 30 -i ' + self.filename + ' -c copy ' + self.filename +'.mp4'
+            cmd = 'ffmpeg -nostats -loglevel 0 -r 25 -i ' + self.filename + ' -c copy ' + self.filename +'.mp4'
             os.system(cmd)
             # delete tmp file
             cmd ='rm ' + self.filename 
@@ -557,7 +565,7 @@ class VideoProcessor:
             
             # Convert to MP4
             mp4_filename = f"{filename}.mp4"
-            cmd = f'ffmpeg -nostats -loglevel 0 -r 30 -i {filename} -c copy {mp4_filename}'
+            cmd = f'ffmpeg -nostats -loglevel 0 -r {self.framerate} -i {filename} -c copy {mp4_filename}'
             os.system(cmd)
             
             # Clean up original file
@@ -1133,10 +1141,12 @@ async def startup():
     
     #Thread(target=Monica.camera_thread, daemon=True).start()
     logger.info(f"starting alert generator")
+    """
     try:
         asyncio.create_task(Monica.alert_generator())
     except Exception as e:
         logger.error(f" error while launching alert generator {e}")
+    """
     # Test connection status at startup
     status = await dongle.get_connection_status()
     logger.info(f"Initial 4G connection status: {'Connected' if status else 'Disconnected'}")
