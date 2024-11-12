@@ -38,6 +38,12 @@ from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 # import for pir detection
 import RPi.GPIO as GPIO
+# import for zigbee
+from models import init_zigbee_db, Device, DeviceEvent
+from models import DatabaseConnection, DatabaseManager
+from zigbee_controller import ZigbeeController
+
+
 # Set up logging
 logging.basicConfig(level=logging.CRITICAL, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -193,8 +199,8 @@ class VideoProcessor:
         self.detections = asyncio.Queue()
         self.recording_queue = Queue()
         
-        #self.recording_thread = threading.Thread(target=self.recording_worker, daemon=True)
-        #self.recording_thread.start()
+        self.recording_thread = threading.Thread(target=self.recording_worker, daemon=True)
+        self.recording_thread.start()
         
 
         self.face_detected = 0
@@ -390,8 +396,19 @@ class VideoProcessor:
                     
                     # Calculate CPU load
                     self.cpu_load = psutil.cpu_percent()
-            self.handle_recording()
-            
+            # the next funcs hangs
+            #asyncio.run_coroutine_threadsafe(
+            #            self.handle_recording(), 
+            #            self.app_loop
+            #        ).result()
+            # mixing sync and async didn't work on piw2 while on pi4
+            #self.handle_recording()
+            """
+            try:
+                asyncio.run(self.handle_recording())
+            except Exception as e:
+                logger.error(f"error while handling recodring {str(e)}")
+            """
             
     def grayout(self,request):
         # can be used as pre buffer to convert color to gray
@@ -451,7 +468,7 @@ class VideoProcessor:
             tm.reset()
             return images
     
-    def handle_recording(self):
+    async def handle_recording(self):
         
         if self.face_detected:
             if not self.recording:
@@ -477,30 +494,49 @@ class VideoProcessor:
             self.circ.stop()
             self.video_writer = None
             self.ltime = None  # Reset ltime when recording stops
-            print("Saving file",self.filename)
+            logger.info(f"Saving file {self.filename}")
             self.face_detected=0 # reset flag in case of processing every other frame
-            print()
-            print("Preparing an mp4 version")
+            
+            logger.info(f"Preparing an mp4 version")
             # convert file to mp4
             cmd = 'ffmpeg -nostats -loglevel 0 -r 25 -i ' + self.filename + ' -c copy ' + self.filename +'.mp4'
-            os.system(cmd)
+            # convert file to mp4
+            process = await asyncio.create_subprocess_shell(
+                        cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+            await process.communicate()
+            #os.system(cmd)
             # delete tmp file
+            logger.info("Removing h264 version")
+            
             cmd ='rm ' + self.filename 
-            os.system(cmd)
+            #os.system(cmd)
+            process = await asyncio.create_subprocess_shell(
+                        cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+            await process.communicate()
             # we need to await an async function
             #self.handle_sms(self.filename+".mp4")
             # if we are not in an async context we need a synchronous wrapper
             #result = self.sync_handle_sms(f"{self.filename}.mp4")
-            asyncio.run_coroutine_threadsafe(
-                        self.handle_sms(f"{self.filename}.mp4"), 
-                        self.app_loop
-                    ).result()
-            asyncio.run_coroutine_threadsafe(
-                        self.save_recording_metadata(f"{self.filename}.mp4"), 
-                        self.app_loop
-                    ).result()
-            print("Removing h264 version")
+            logger.info(f"send sms with recording URL")
+            #asyncio.run_coroutine_threadsafe(
+            #            self.handle_sms(f"{self.filename}.mp4"), 
+            #            self.app_loop
+            #        ).result()
+            await self.handle_sms(f"{self.filename}.mp4")
+            #asyncio.run_coroutine_threadsafe(
+            #            self.save_recording_metadata(f"{self.filename}.mp4"), 
+            #            self.app_loop
+            #        ).result()
+            await self.save_recording_metadata(f"{self.filename}.mp4")
             print("Waiting for next trigger")
+            return
+        return
     
     def recording_worker(self):
         ''' thread that is supposed to handle recording upon detection
@@ -590,7 +626,7 @@ class VideoProcessor:
     async def handle_sms(self, filename):
         # to be done sending the url instead filename
         url = f"http://{self.ip}:8000/get_recording{filename}"
-        msg = f"Motion Detected check the file: {url}"
+        msg = f"Merte encore un brol qui ne fonctionne pas check the file: {url}"
         logger.info(f"sms msg : {msg}")
         try:
             async for db in get_db():
@@ -795,7 +831,7 @@ async def create_contact():
         'alias': form['alias'],
         'first_name': form['first_name'],
         'last_name': form['last_name'],
-        'email': form['email'],
+        #'email': form['email'],
         'phone': form['phone']
     }
 
@@ -849,7 +885,7 @@ async def edit_contact(id):
             update_data = {
                 'first_name': form.get('first_name'),
                 'last_name': form.get('last_name'),
-                'email': form.get('email'),
+                #'email': form.get('email'),
                 'phone': form.get('phone')
             }
             await DatabaseOperations.update_contact(db, contact, **update_data)
@@ -1121,6 +1157,179 @@ async def version():
 
 #---------------------------------------------------------------
 #
+#       ZIGBEE
+#
+#---------------------------------------------------------------
+ws_connections = set()
+
+async def zigbee_notify_clients(device_name, message):
+    logger.info(f"notify client {message}")
+    notification = json.dumps({
+        'device': device_name,
+        'message': message,
+        'timestamp': datetime.now().isoformat()
+    })
+    for ws in ws_connections:
+        try:
+            await ws.send(notification)
+        except Exception:
+            ws_connections.discard(ws)
+
+async def zigbee_notify_new_device(device):
+    logger.info(f"notify about new device {device}")
+    notification = json.dumps({
+        'type': 'new_device',
+        'device': {
+            'id': device.id,
+            'ieee': device.ieee,
+            'friendly_name': device.friendly_name,
+            'device_type': device.device_type,
+            'manufacturer': device.manufacturer,
+            'model': device.model,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+        },
+        'timestamp': datetime.now().isoformat()
+    })
+    for ws in ws_connections:
+        try:
+            await ws.send(notification)
+        except Exception:
+            ws_connections.discard(ws)
+
+async def zigbee_dongle_status(dongle):
+    logger.info(f"dongle status callback")
+    notification = json.dumps({
+        'type': 'zigbee_status',
+        'message': dongle['model'],
+        'timestamp': datetime.now().isoformat()
+    })
+    for ws in ws_connections:
+        try:
+            await ws.send(notification)
+        except Exception:
+            ws_connections.discard(ws)
+@app.websocket('/ws_zigbee')
+async def ws_zigbee():
+    ws_connections.add(websocket._get_current_object())
+    try:
+        while True:
+            await websocket.receive()
+    finally:
+        ws_connections.discard(websocket._get_current_object())
+
+@app.route('/zigbee')
+async def zigbee_html():
+    return await render_template('zigbee.html')
+
+@app.route('/api/devices')
+async def get_devices():
+    db_connection = await DatabaseConnection.get_instance()
+    #async with get_session() as session:
+    async with db_connection.get_session() as session:
+        result = await session.execute(select(Device))
+        devices = result.scalars().all()
+        return jsonify([{
+            'id': d.id,
+            'ieee': d.ieee,
+            'friendly_name': d.friendly_name,
+            'device_type': d.device_type,
+            'manufacturer': d.manufacturer,
+            'model': d.model,
+            'last_seen': d.last_seen.isoformat() if d.last_seen else None,
+            'trigger': d.trigger,  # Add trigger field
+            'mention': d.mention  # Add mention field
+        } for d in devices])
+
+@app.route('/api/events')
+async def get_events():
+    db_connection = await DatabaseConnection.get_instance()
+    #async with get_session() as session:
+    async with db_connection.get_session() as session:
+        stmt = select(DeviceEvent).order_by(DeviceEvent.timestamp.desc()).limit(100)
+        result = await session.execute(stmt)
+        
+        events = result.scalars().all()
+        return jsonify([{
+            'device_id': e.device_id,
+            'event_type': e.event_type,
+            'description': e.description,
+            'timestamp': e.timestamp.isoformat()
+        } for e in events])
+
+@app.route('/api/scan', methods=['POST'])
+async def start_scan():
+    data = await request.get_json()
+    duration = data.get('duration', 60)
+    await zigbee_controller.start_scanning(duration)
+    return jsonify({'status': 'success', 'message': f'Scanning for {duration} seconds'})
+
+@app.route('/api/devices/<ieee>', methods=['DELETE'])
+async def remove_device(ieee):
+    await zigbee_controller.remove_device(ieee)
+    return jsonify({'status': 'success'})
+
+@app.route('/api/devices/<ieee>/name', methods=['PUT'])
+async def update_device_name(ieee):
+    data = await request.get_json()
+    friendly_name = data.get('friendly_name')
+    if friendly_name:
+        await zigbee_controller.update_friendly_name(ieee, friendly_name)
+        return jsonify({'status': 'success'})
+    return jsonify({'status': 'error', 'message': 'friendly_name is required'}), 400
+
+
+@app.route('/api/devices/<ieee>/settings', methods=['PUT'])
+async def update_device_settings(ieee):
+    db_connection = await DatabaseConnection.get_instance()
+    try:
+        # Get the JSON data from the request
+        data = await request.get_json()
+        logger.info(f"data received {data} and ieee {ieee}")
+        
+        # Validate that we're only updating allowed settings
+        allowed_settings = {'trigger', 'mention'}
+        update_data = {k: v for k, v in data.items() if k in allowed_settings}
+        logger.info(f"update data {update_data}")
+        if not update_data:
+            return jsonify({
+                'error': 'No valid settings provided. Allowed settings: trigger, mention'
+            }), 400
+
+        # Update the device in the database
+        async with db_connection.get_session() as connection:
+            
+            # First check if the device exists
+            query = select(Device).where(Device.ieee == str(ieee))
+            result = await connection.execute(query)
+            
+            #device = await result.first()
+            device = result.scalar_one_or_none()
+            
+            if not device:
+                return jsonify({'error': 'Device not found'}), 404
+            # Update each setting using setattr
+            
+            for key, value in update_data.items():
+                
+                setattr(device, key, value)
+                
+            
+            await connection.commit()
+
+        return jsonify({
+            'message': 'Settings updated successfully',
+            'ieee': ieee,
+            'updated_settings': update_data
+        }), 200
+
+    except Exception as e:
+        # Log the error for debugging
+        print(f"Error updating device settings: {str(e)}")
+        return jsonify({
+            'error': 'Internal server error occurred while updating settings'
+        }), 500
+#---------------------------------------------------------------
+#
 #               BEFORE SERVING
 #
 # the server and the process need to start before a client connects
@@ -1132,21 +1341,44 @@ async def version():
 @app.before_serving
 async def startup():
     global Monica
+    global zigbee_controller
     logger.info("Starting up application...")
+    #initialise main database
+    logger.info("init application database")
     await init_db()
+    # Initialize zigbee database
+    logger.info("init zigbee database")
+    db_connection = await DatabaseConnection.get_instance()
+    await db_connection.init_db()
     # Store the main event loop
     main_loop = asyncio.get_event_loop()
+    # Initialize ZigbeeController
+    logger.info(f"init zigbee controller")
+    zigbee_controller = ZigbeeController(main_loop, notification_callback=zigbee_notify_clients)
+    await zigbee_controller.initialize()
+    zigbee_controller.add_new_device_callback(zigbee_notify_new_device)
+    zigbee_controller.add_new_device_callback(zigbee_dongle_status)
+    # Initialize zigbee dongle
+    detected_type = zigbee_controller.detect_dongle()
+    if detected_type:
+        if await zigbee_controller.initialize_dongle(port='/dev/ttyS0'):
+        	logger.info("Dongle initialized successfully")
+        else:
+            logger.info("Zigbee dongle not initialised")
+    else:
+        logger.info("No compatible dongle detected")
+
     logger.info('starting video processor')
     Monica = VideoProcessor(main_loop)
     
     #Thread(target=Monica.camera_thread, daemon=True).start()
     logger.info(f"starting alert generator")
-    """
+    
     try:
         asyncio.create_task(Monica.alert_generator())
     except Exception as e:
         logger.error(f" error while launching alert generator {e}")
-    """
+    
     # Test connection status at startup
     status = await dongle.get_connection_status()
     logger.info(f"Initial 4G connection status: {'Connected' if status else 'Disconnected'}")

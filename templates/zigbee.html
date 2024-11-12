@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block content %}
+
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl font-bold mb-8">Zigbee Device Manager</h1>
+        
+        <!-- Scanning Controls -->
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <h2 class="text-xl font-semibold mb-4">Device Scanning</h2>
+            <div class="flex gap-4">
+                <input type="number" id="scanDuration" value="60" min="10" max="300" 
+                       class="border rounded px-3 py-2 w-24">
+                <button onclick="startScanning()" 
+                        class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                    Start Scanning
+                </button>
+            </div>
+        </div>
+
+        <!-- Devices List -->
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <h2 class="text-xl font-semibold mb-4">Devices</h2>
+            <div id="devicesList" class="space-y-4"></div>
+        </div>
+
+        <!-- Events Log -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-xl font-semibold mb-4">Event Log</h2>
+            <div id="eventsList" class="space-y-2 max-h-96 overflow-y-auto"></div>
+        </div>
+
+        <!-- Notifications -->
+        <div id="notifications" class="fixed bottom-4 right-4 space-y-2"></div>
+    </div>
+
+    <script>
+        let ws_zigbee;
+
+        async function loadDevices() {
+            const response = await fetch('/api/devices');
+            const devices = await response.json();
+            const devicesList = document.getElementById('devicesList');
+            devicesList.innerHTML = '';
+            devices.forEach(device => {
+                const deviceDiv = document.createElement('div');
+                deviceDiv.className = 'bg-gray-200 rounded-lg p-4 flex justify-between items-center';
+                deviceDiv.innerHTML = `
+                    <div class="flex flex-col space-y-4">
+                        <!-- Top row with name and alias input -->
+                        <div class="flex flex-wrap items-center gap-4">
+                            <h3 class="text-lg font-medium">${device.friendly_name || device.ieee}</h3>
+                                <div class="flex items-center">
+                                    <label for="aliasInput" class="mr-2">Change Alias</label>
+                                    <input type="text" 
+                                        id="aliasInput"
+                                        placeholder="Change alias"
+                                        class="border rounded px-2 py-1 w-32" 
+                                        onchange="updateDeviceName('${device.ieee}', this.value)" 
+                                        value="${device.friendly_name || ''}">
+                                </div>
+                        </div>
+        
+                        <!-- Device info -->
+                        <div class="text-sm text-gray-500">
+                            <p>Type: ${device.device_type}</p>
+                            <p>Last seen: ${device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Never'}</p>
+                        </div>
+        
+                        <!-- Controls -->
+                            <div class="flex flex-wrap items-center gap-4">
+                            <!-- Checkboxes -->
+                            <div class="flex flex-wrap gap-4">
+                                <label class="inline-flex items-center">
+                                <input type="checkbox" 
+                                class="form-checkbox h-5 w-5 text-blue-600"
+                                ${device.trigger ? 'checked' : ''}
+                                onchange="updateDeviceSettings('${device.ieee}', 'trigger', this.checked)">
+                                <span class="ml-2">Trigger</span>
+                                </label>
+                                <label class="inline-flex items-center">
+                                <input type="checkbox" 
+                                class="form-checkbox h-5 w-5 text-blue-600"
+                                ${device.mention ? 'checked' : ''}
+                                onchange="updateDeviceSettings('${device.ieee}', 'mention', this.checked)">
+                                <span class="ml-2">Mention</span>
+                                </label>
+                            </div>
+            
+                            <!-- Remove button -->
+                            <button class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
+                            onclick="removeDevice('${device.ieee}')">
+                            Remove
+                            </button>
+                        </div>
+                    </div>
+                `;
+                devicesList.appendChild(deviceDiv);
+            });
+        }
+
+        async function updateDeviceSettings(ieee, setting, value) {
+            try {
+                const response = await fetch(`/api/devices/${ieee}/settings`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ [setting]: value })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to update device settings');
+                }
+                
+                showNotification('System', `Updated ${setting} setting for device`);
+            } catch (error) {
+                console.error('Error updating device settings:', error);
+                showNotification('Error', `Failed to update ${setting} setting`);
+            }
+        }
+        async function loadEvents() {
+            const response = await fetch('/api/events');
+            const events = await response.json();
+            const eventsList = document.getElementById('eventsList');
+            eventsList.innerHTML = '';
+            events.forEach(event => {
+                const eventDiv = document.createElement('div');
+                eventDiv.className = 'bg-gray-200 rounded-lg p-3';
+                eventDiv.innerHTML = `
+                    <p class="text-gray-500 text-sm">${new Date(event.timestamp).toLocaleString()}</p>
+                    <p class="font-medium">${event.event_type.toUpperCase()}: ${event.description}</p>
+                `;
+                eventsList.appendChild(eventDiv);
+            });
+        }
+
+        async function refreshDevices() {
+            await loadDevices();
+        }
+
+        async function refreshEvents() {
+            await loadEvents();
+        }
+
+        async function updateDeviceName(ieee, name) {
+            await fetch(`/api/devices/${ieee}/name`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({friendly_name: name})
+            });
+            refreshDevices();
+        }
+
+        async function removeDevice(ieee) {
+            if (confirm('Are you sure you want to remove this device?')) {
+                await fetch(`/api/devices/${ieee}`, {method: 'DELETE'});
+                refreshDevices();
+            }
+        }
+
+        function connectWebSocket() {
+            ws_zigbee = new WebSocket(`ws://${window.location.host}/ws_zigbee`);
+            ws_zigbee.onmessage = function(event) {
+                const notification = JSON.parse(event.data);
+				if (notification.type === 'new_device') {
+                    addDevice(notification.device);
+                } else {
+                	showNotification(notification.device, notification.message);
+                	refreshEvents();
+				}
+            };
+            ws_zigbee.onclose = function() {
+                setTimeout(connectWebSocket, 1000);
+            };
+        }
+
+        // ... (rest of the existing JavaScript code remains the same) ...
+
+        function addDevice(device) {
+            const deviceDiv = document.createElement('div');
+            deviceDiv.className = 'bg-gray-200 rounded-lg p-4 flex justify-between items-center';
+            deviceDiv.innerHTML = `
+                <div>
+                    <h3 class="text-lg font-medium">${device.friendly_name || device.ieee}</h3>
+                    <p class="text-gray-500">Type: ${device.device_type}</p>
+                    <p class="text-gray-500">Last seen: ${device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Never'}</p>
+                </div>
+                <div class="space-x-4">
+                    <div class="flex items-center space-x-2">
+                        <label class="inline-flex items-center">
+                            <input type="checkbox" 
+                                   class="form-checkbox h-5 w-5 text-blue-600"
+                                   ${device.trigger ? 'checked' : ''}
+                                   onchange="updateDeviceSettings('${device.ieee}', 'trigger', this.checked)">
+                            <span class="ml-2">Trigger</span>
+                        </label>
+                        <label class="inline-flex items-center">
+                            <input type="checkbox" 
+                                   class="form-checkbox h-5 w-5 text-blue-600"
+                                   ${device.mention ? 'checked' : ''}
+                                   onchange="updateDeviceSettings('${device.ieee}', 'mention', this.checked)">
+                            <span class="ml-2">Mention</span>
+                        </label>
+                    </div>
+                    <div class="space-x-2">
+                        <input type="text" class="border rounded px-2 py-1 w-32" 
+                               onchange="updateDeviceName('${device.ieee}', this.value)">
+                        <button class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
+                                onclick="removeDevice('${device.ieee}')">
+                            Remove
+                        </button>
+                    </div>
+                </div>
+            `;
+            document.getElementById('devicesList').appendChild(deviceDiv);
+        }
+
+        // ... (rest of the existing JavaScript code remains the same) ...
+        function showNotification(device, message) {
+            const notification = document.createElement('div');
+            notification.className = 'bg-blue-500 text-white px-4 py-2 rounded shadow-lg';
+            notification.textContent = `${device}: ${message}`;
+            document.getElementById('notifications').appendChild(notification);
+            setTimeout(() => notification.remove(), 5000);
+        }
+
+        async function startScanning() {
+            const duration = document.getElementById('scanDuration').value;
+            await fetch('/api/scan', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({duration: parseInt(duration)})
+            });
+            showNotification('System', `Scanning for ${duration} seconds`);
+        }
+
+        window.onload = async function() {
+            await loadDevices();
+            await loadEvents();
+            connectWebSocket();
+        };
+    </script>
+</body>
+
+{% endblock %}

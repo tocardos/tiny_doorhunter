@@ -9,7 +9,10 @@
     <title>{{ title }}</title>
     
 	<link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
-	<style>
+    
+    <link href="{{ url_for('static', filename='css/tailwind.min.css') }}" rel="stylesheet">
+
+    <style>
         .recording-item {
             margin-bottom: 20px;
         }
@@ -153,6 +156,9 @@
                     <a class="nav-link" href="{{ url_for('status') }}">Live</a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('zigbee_html') }}">Zigbee</a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link" href="{{ url_for('settings') }}">Settings</a>
                 </li>
                 <li class="nav-item">
@@ -165,6 +171,7 @@
                 <li class="nav-item">
                     <a class="nav-link" href="{{ url_for('version') }}">Version</a>
                 </li>
+                
             </ul>
             
         </div>

@@ -235,7 +235,7 @@ class Contact(Base):
     alias = Column(String(80), unique=True, nullable=False)
     first_name = Column(String(80), nullable=False)
     last_name = Column(String(80), nullable=False)
-    email = Column(String(120), unique=True, nullable=False)
+    email = Column(String(120), unique=True, nullable=True)
     mail_send = Column(Boolean, default=False) # mail not implemented
     phone = Column(String(20), unique=True, nullable=False)
     sms_send = Column(Boolean, default=False) # flag used to select which phone to send to
