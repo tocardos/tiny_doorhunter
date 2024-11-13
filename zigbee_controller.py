@@ -578,6 +578,11 @@ class ZigbeeListener:
                     event_type="action",
                     description=description
                     )
+                for callback in self.controller.new_device_callbacks:
+                   if callback.__name__ =='zigbee_dongle_status':
+                       asyncio.create_task(callback(description))
+               #if self.status_callback:
+               #     await self.status_callback(True)
 
             #LOGGER.info(f"device {device.ieee} not in db")
         

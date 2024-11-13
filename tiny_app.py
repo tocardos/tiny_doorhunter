@@ -396,6 +396,8 @@ class VideoProcessor:
                     
                     # Calculate CPU load
                     self.cpu_load = psutil.cpu_percent()
+                    #cpu_count = psutil.cpu_count()
+                    #cpu_stat = psutil.cpu_stats()
             # the next funcs hangs
             #asyncio.run_coroutine_threadsafe(
             #            self.handle_recording(), 
